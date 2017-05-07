@@ -7,11 +7,24 @@
 
 #define HTTP_GET "GET /%s HTTP/1.1\r\nHOST: %s:%d\r\nAccept: */*\r\n\r\n"  
 
+#define HTTP_SET_TIMEOUT(socket, attri, tmval)	\
+	setsockopt((socket), SOL_SOCKET, (attri), (const uni_char *)&(tmval), sizeof(tmval))
+
+#define HTTP_TIMEOUT_VALUE		3
+#define SOCKET_BLOCK			0
+#define SOCKET_NONBLOCK			1
+
 static int http_tcpclient_create(const char *host, int port){  
     //struct hostent *he;  
     struct sockaddr_in server_addr;   
-    int socket_fd;  
+    uni_s32 socket_fd;  
     uni_in_addr_t ip;
+	struct timeval tTimeout = {HTTP_TIMEOUT_VALUE, 0};
+	fd_set iSockSet = 0;
+	uni_long ulMode = SOCKET_NONBLOCK;
+	uni_s32 iError = FUNC_FAILED;
+	uni_s32 iLen = 0;
+	uni_s32 ret = 0;
 
     if(uni_gethostbyname((uni_char*)(intptr_t)host, &ip)){
        return -1;
@@ -22,7 +35,10 @@ static int http_tcpclient_create(const char *host, int port){
     //server_addr.sin_addr = *((struct in_addr *)he->h_addr);  
     server_addr.sin_addr.s_addr = ip;  
 
-    uni_printf("ip: %x port: %x\n", (int)server_addr.sin_addr.s_addr, (int)server_addr.sin_port);
+    uni_printf("ip: %x port: %x\n", (int)server_addr.sin_addr.s_addr, (int)server_addr.sin_port);	
+
+	HTTP_SET_TIMEOUT(socket_fd, SO_SNDTIMEO, &tTimeout);
+	HTTP_SET_TIMEOUT(socket_fd, SO_RCVTIMEO, &tTimeout);
 
     socket_fd = uni_socket(AF_INET, SOCK_STREAM, 0);  
     if(socket_fd  == -1) {  
@@ -30,11 +46,40 @@ static int http_tcpclient_create(const char *host, int port){
         return -1;  
     }  
 
-    int ret = uni_connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));  
+	ioctl(socket_fd, FIONBIO, &ulMode); 
+
+    ret = uni_connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));  
+	//ret == EINPROGRESS
     if(ret == -1) {  
-        uni_printf("%s connect error\n", __func__);
-        return -1;  
-    }  
+		FD_ZERO(&iSockSet);
+		FD_SET(socket_fd, &iSockSet);
+		if (select(socket_fd + 1, NULL, &iSockSet, NULL, &tTimeout) > 0)
+		{
+			iLen = sizeof(uni_s32);
+			getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &iError, (socklen_t *)&iLen);
+			if (0 == error) {
+				ret = FUNC_SUCCESS;
+			}
+			else {
+				ret = FUNC_FAILED;
+				goto EXIT_LABEL;
+			}
+		} else {
+			ret = FUNC_FAILED;
+			goto EXIT_LABEL;
+		}
+    } else {
+		ret = FUNC_SUCCESS;
+	}  
+
+	ulMode = SOCKET_BLOCK;
+	ioctl(socket_fd, FIONBIO, &ulMode);
+
+EXIT_LABEL:
+	if (FUNC_FAILED == ret) {
+		close(socket_fd);
+		return -1;
+	}
 
     return socket_fd;  
 }  
@@ -201,6 +246,80 @@ static char *http_parse_result(const char*lpbuf)
 
     return response;  
 }  
+
+static uni_char *uni_msg_compose(uni_s32 iType, uni_void *ptArgs) 
+{
+	uni_char **ptReturn = NULL;
+	uni_char *ptMsgParam = NULL;
+	uni_s32 iReturn = FUNC_FAILED;
+
+	if (NULL == ptArgs) {
+		goto EXIT_LABEL;
+	}
+
+	switch (iType) 
+	{
+	case MSG_TYPE_ACTIVE_DEV:
+		break;
+	case MSG_TYPE_REFRESH_TOKEN:
+		break;
+	case default:
+		break;	
+	}
+
+EXIT_LABEL:
+	if (FUNC_FAILED == iReturn && *ptReturn != NULL) {
+		free(*ptReturn);
+		*ptReturn = NULL;
+	}
+	return *ptReturn;
+}
+
+typedef struct uni_msg_active_dev_t {
+	uni_char *ptMsgParam[19];
+}uni_msg_devactive_t;
+
+typedef enum uni_msg_active_dev_e {
+	DEVACTIVE_UDID = 0,
+	DEVACTIVE_DEVSN,
+	DEVACTIVE_APPKEY,
+	DEVACTIVE_TIMESTAMP,
+	DEVACTIVE_APPVER,
+	DEVACTIVE_PKGNAME,
+	DEVACTIVE_IMEI,
+	DEVACTIVE_MACADDR,
+	DEVACTIVE_WIFISSID,
+	DEVACTIVE_TEL_OPERATOR,
+	DEVACTIVE_BSSID,
+	DEVACTIVE_PRODUCT_NAME,
+	DEVACTIVE_PRODUCT_MODEL,
+	DEVACTIVE_PRODUCT_MFR,
+	DEVACTIVE_PRODUCT_OS,
+	DEVACTIVE_PRODUCT_OSVER,
+	DEVACTIVE_HWSN,
+	DEVACTIVE_MEMO,
+	DEVACTIVE_SIGNATURE,
+	DEVACTIVE_END
+}msg_devactive_e;
+
+static uni_s32 compose_active_msg(uni_char **ptBuffer, uni_msg_devactive_t *ptParam)
+{
+	uni_s32 iReturn = FUNC_FAILED;
+	uni_char *ptMsg = NULL;
+	if (NULL == ptBuffer) {
+		goto EXIT_LABEL;
+	}
+
+	*ptBuffer = (uni_char *)uni_malloc(2048);
+	ptMsg = ptBuffer;
+	if (NULL == ptMsg) {
+		goto EXIT_LABEL;
+	}
+
+
+EXIT_LABEL:
+	return iReturn;	
+}
 
 char * uni_http_post(const char *url, const char *post_str){  
 
